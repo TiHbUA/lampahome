@@ -4,8 +4,6 @@
     if (window.torrent_pretty_plugin) return;
     window.torrent_pretty_plugin = true;
 
-    var MANY_SEEDS = 500; // від скількох сідів показувати «Багато роздавальників»
-
     var CSS = '\
 .torrent-item.tp-done{padding:0!important;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);border-radius:1em;margin-bottom:.7em;overflow:hidden}\
 .torrent-item.tp-done.focus{background:rgba(255,255,255,.1);box-shadow:0 0 0 .2em #fff}\
@@ -174,21 +172,21 @@
         var all = document.querySelectorAll('.torrent-item.tp-done');
         if (!all.length) return;
 
-        var rec = null, recSeeds = -1;
-        for (var i = 0; i < all.length; i++) {
-            var it = all[i];
-            if (it.getAttribute('data-tp-hd') && it.getAttribute('data-tp-dub')) {
-                var sd = parseInt(it.getAttribute('data-tp-seeds'), 10) || 0;
-                if (sd > recSeeds) { recSeeds = sd; rec = it; }
-            }
-        }
+        // Сортуємо за кількістю роздаючих: 1-ша — «Рекомендовано», наступні 3 — «Багато роздавальників»
+        var sorted = Array.prototype.slice.call(all).sort(function (a, b) {
+            return (parseInt(b.getAttribute('data-tp-seeds'), 10) || 0) -
+                   (parseInt(a.getAttribute('data-tp-seeds'), 10) || 0);
+        });
 
         for (var j = 0; j < all.length; j++) {
             var item = all[j];
             var seeds = parseInt(item.getAttribute('data-tp-seeds'), 10) || 0;
+            var pos = sorted.indexOf(item);
             var kind = '';
-            if (item === rec) kind = 'rec';
-            else if (seeds >= MANY_SEEDS) kind = 'many';
+            if (seeds > 0) {
+                if (pos === 0) kind = 'rec';
+                else if (pos <= 3) kind = 'many';
+            }
 
             var key = kind ? kind + '|' + seeds : '';
             if ((item.getAttribute('data-tp-foot') || '') === key) continue; // нічого не міняємо
