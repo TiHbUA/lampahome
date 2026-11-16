@@ -21,6 +21,8 @@
 .tp-badges{display:flex;flex-wrap:wrap;gap:.5em;margin-bottom:.45em}\
 .tp-badge{display:inline-flex;align-items:center;gap:.4em;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.06);border-radius:.5em;padding:.25em .7em;font-size:.95em;font-weight:600}\
 .tp-badge svg{width:.85em;height:.85em;fill:currentColor}\
+.tp-badge.mono{font-family:monospace;letter-spacing:.1em;font-weight:700}\
+.tp-tech .tp-badge{background:rgba(255,255,255,.06);font-size:.85em;padding:.2em .6em}\
 .tp-meta{display:flex;flex-wrap:wrap;gap:.3em 1.2em;font-size:.9em;color:#9aa}\
 .tp-side{flex:0 0 auto;text-align:right}\
 .tp-seeds{font-size:1.6em;font-weight:700;display:flex;align-items:center;justify-content:flex-end;gap:.3em;line-height:1.1}\
@@ -41,13 +43,18 @@
 
     var MIC = '<svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>';
 
+    var DV_ICON = '<svg viewBox="0 0 24 12" style="width:1.4em;height:.7em"><path d="M0 0h8a6 6 0 0 1 0 12H0z"/><path d="M24 0h-8a6 6 0 0 0 0 12h8z"/></svg>';
+
     var DUB_RE = /Дубляж|Дубл(?![а-яіїє])|ДБ(?![А-Яа-яІіЇїЄє])|\bDUB\b/i;
 
     var TRANSLATIONS = [
         [DUB_RE, 'Дубляж'], [/HDRezka/i, 'HDRezka'], [/LostFilm/i, 'LostFilm'],
         [/TVShows/i, 'TVShows'], [/Jaskier/i, 'Jaskier'], [/ColdFilm/i, 'ColdFilm'],
         [/Кубик/i, 'Кубик в кубе'], [/AMEDIA/i, 'AMEDIA'], [/\bUkr\b|Укр/i, 'UKR'],
-        [/\bMVO\b/i, 'MVO'], [/\bAVO\b/i, 'AVO']
+        [/\bMVO\b/i, 'MVO'], [/\bAVO\b/i, 'AVO'],
+        [/Red\s*Head\s*Sound|\bRHS\b/i, 'Red Head Sound'], [/NewStudio/i, 'NewStudio'],
+        [/Пифагор|Піфагор/i, 'Піфагор'], [/SDI\s*Media/i, 'SDI Media'],
+        [/Pazl\s*Voice/i, 'Pazl Voice'], [/Videofilm/i, 'Videofilm'], [/Gears\s*Media/i, 'Gears Media']
     ];
 
     function txt(el, sel) {
@@ -113,13 +120,28 @@
         var main = el('div', 'tp-main');
         main.appendChild(el('div', 'tp-title', title));
 
+        // Рядок 1: технічні позначки
+        var tech = el('div', 'tp-badges tp-tech');
+        if (/HDR/i.test(title)) tech.appendChild(el('span', 'tp-badge', /HDR10\+/i.test(title) ? '☀ HDR10+' : '☀ HDR'));
+        if (/Dolby\s*Vision|\bDV\b/i.test(title)) {
+            var dv = el('span', 'tp-badge');
+            dv.innerHTML = DV_ICON;
+            tech.appendChild(dv);
+        }
+        var codecs = [[/HEVC|H\.?265|x265/i, 'HEVC'], [/\bAV1\b/i, 'AV1'], [/IMAX/i, 'IMAX'],
+                      [/Atmos/i, 'ATMOS'], [/TrueHD/i, 'TRUEHD'], [/DTS/i, 'DTS']];
+        for (var c = 0; c < codecs.length; c++) {
+            if (codecs[c][0].test(title)) tech.appendChild(el('span', 'tp-badge mono', codecs[c][1]));
+        }
+        if (tech.childNodes.length) main.appendChild(tech);
+
+        // Рядок 2: якість, HDR, озвучення
         var badges = el('div', 'tp-badges');
-        if (/HDR/i.test(title)) badges.appendChild(el('span', 'tp-badge', '☀ HDR'));
-        if (/Dolby\s*Vision|\bDV\b/i.test(title)) badges.appendChild(el('span', 'tp-badge', 'Dolby Vision'));
         if (q.tag) badges.appendChild(el('span', 'tp-badge', q.tag));
+        if (/HDR/i.test(title)) badges.appendChild(el('span', 'tp-badge', 'HDR'));
 
         var hasDub = DUB_RE.test(title);
-        for (var i = 0; i < TRANSLATIONS.length; i++) {
+        for (var i = 0; hasDub && i < TRANSLATIONS.length; i++) { // озвучення — лише якщо є дубляж
             if (TRANSLATIONS[i][0].test(title)) {
                 var b = el('span', 'tp-badge');
                 b.innerHTML = MIC;
