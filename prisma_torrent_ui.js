@@ -7,12 +7,15 @@
     var CSS = '\
 .torrent-item.tp-done{padding:0!important;background:rgba(255,255,255,.04);border-radius:1.2em;margin-bottom:.8em;overflow:hidden}\
 .torrent-item.tp-done.focus{background:rgba(255,255,255,.12);box-shadow:0 0 0 .2em #fff}\
-.torrent-item.tp-done .torrent-item__title,.torrent-item.tp-done .torrent-item__details{display:none!important}\
+.torrent-item.tp-done>*:not(.tp-row):not(.tp-foot){display:none!important}\
+.tp-foot{display:flex;align-items:center;gap:.8em;padding:.8em 1.2em;background:rgba(255,255,255,.07);border-top:1px solid rgba(255,255,255,.08)}\
+.tp-foot-ico{flex:0 0 1.6em;height:1.6em;border:.12em solid #4ade80;border-radius:50%;color:#4ade80;display:flex;align-items:center;justify-content:center;font-size:1em;font-weight:700;line-height:1}\
+.tp-foot-t{font-weight:700;font-size:1.05em}\
+.tp-foot-s{font-size:.85em;color:#9aa}\
 .tp-row{display:flex;align-items:center;padding:1em 1.2em;gap:1.2em}\
 .tp-q{flex:0 0 6em;text-align:center;line-height:1.3}\
 .tp-q b{display:block;font-size:1.3em;font-weight:700;color:#fff}\
 .tp-q b.q4k{color:#f5c542}\
-.tp-q b.qlow{color:#aaa}\
 .tp-q small{display:block;font-size:.85em;color:#9aa}\
 .tp-q em{display:block;font-style:normal;font-weight:700;color:#f5c542;font-size:.9em}\
 .tp-main{flex:1;min-width:0}\
@@ -84,7 +87,21 @@
         var left = el('div', 'tp-q');
         left.appendChild(el('b', q.cls, q.label));
         if (/Dolby\s*Vision|\bDV\b/i.test(title)) left.appendChild(el('em', '', 'DV'));
-        if (bitrate) left.appendChild(el('small', '', bitrate));
+        var brNum = '', brUnit = '';
+        if (bitrate) {
+            var bm = bitrate.replace(/^[^\d]*/, '').match(/^([\d.,]+)\s*(.*)$/);
+            if (bm) { brNum = bm[1]; brUnit = bm[2]; }
+        }
+        if (brNum) {
+            var bs = el('small', '', brNum);
+            bs.style.fontWeight = '700';
+            bs.style.color = '#cfd8d8';
+            left.appendChild(bs);
+            if (brUnit) left.appendChild(el('small', '', brUnit));
+        }
+        item.setAttribute('data-tp-seeds', seeds);
+        item.setAttribute('data-tp-q', q.label);
+        item.setAttribute('data-tp-br', brNum);
         row.appendChild(left);
 
         // Центр: назва, бейджі, дата, трекери
@@ -132,11 +149,42 @@
         item.classList.add('tp-done');
     }
 
+    function markBest() {
+        var all = document.querySelectorAll('.torrent-item.tp-done');
+        if (!all.length) return;
+
+        var best = null, max = 0;
+        for (var i = 0; i < all.length; i++) {
+            var sd = parseInt(all[i].getAttribute('data-tp-seeds'), 10) || 0;
+            if (sd > max) { max = sd; best = all[i]; }
+        }
+        if (max < 100) best = null;
+
+        // Якщо смужка вже стоїть де треба і більше ніде — DOM не чіпаємо
+        var foots = document.querySelectorAll('.torrent-item .tp-foot');
+        if (best && foots.length === 1 && foots[0].parentNode === best) return;
+        if (!best && !foots.length) return;
+
+        for (var j = 0; j < foots.length; j++) foots[j].parentNode.removeChild(foots[j]);
+        if (!best) return;
+
+        var foot = el('div', 'tp-foot');
+        foot.appendChild(el('div', 'tp-foot-ico', '✓'));
+        var box = el('div', '');
+        box.appendChild(el('div', 'tp-foot-t', 'Багато роздавальників (' + max + ')'));
+        var br = parseFloat(String(best.getAttribute('data-tp-br')).replace(',', '.'));
+        var sub = best.getAttribute('data-tp-q') + (br ? ' • ' + Math.round(br) + ' Mbps' : '');
+        box.appendChild(el('div', 'tp-foot-s', sub));
+        foot.appendChild(box);
+        best.appendChild(foot);
+    }
+
     function scan(root) {
         var items = (root || document).querySelectorAll('.torrent-item:not(.tp-done)');
         for (var i = 0; i < items.length; i++) {
             try { build(items[i]); } catch (e) { /* не ламаємо Lampa */ }
         }
+        try { markBest(); } catch (e) {}
     }
 
     function start() {
