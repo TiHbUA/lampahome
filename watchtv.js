@@ -66,35 +66,76 @@
         return Lampa.Storage.get('uafresh_proxy', '') || '';
     }
 
-    function isAndroid() {
+    function streamViaProxy() {
+        var v = Lampa.Storage.get('uafresh_stream_proxy', false);
+        return v === true || v === 'true';
+    }
+
+    function platformIs(name) {
         try {
-            return !!(Lampa.Platform && Lampa.Platform.is && Lampa.Platform.is('android'));
+            return !!(Lampa.Platform && Lampa.Platform.is && Lampa.Platform.is(name));
         } catch (e) {
             return false;
         }
     }
 
     // ===== МЕРЕЖА =====
-    // o: { post, ref, xhr }
+    function hostOf(url) {
+        return (String(url).match(/^https?:\/\/([^\/?#]+)/i) || [])[1] || '';
+    }
+
+    function describe(a) {
+        var status = a && a.status;
+        var text = a && (a.responseText || a.message || a.error);
+        if (text && typeof text === 'string') {
+            var t = text.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+            text = (t ? t[1] : text).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+        } else text = '';
+        var head = status ? 'HTTP ' + status : 'немає з\'єднання';
+        if (/just a moment|attention required|cloudflare/i.test(text)) head += ' (захист Cloudflare)';
+        return head + (text ? ' «' + text + '»' : '');
+    }
+
+    var hostPref = {};
+
+    // Спочатку напряму (працює в застосунку Android та з українським IP),
+    // потім через проксі. o: { post, ref, xhr }
     function get(url, ok, fail, o) {
         o = o || {};
-        var net = new Lampa.Reguest();
         var p = proxy();
-        var u = p ? p + encodeURIComponent(url) +
-            (o.ref ? '&ref=' + encodeURIComponent(o.ref) : '') +
-            (o.xhr ? '&xhr=1' : '') : url;
+        var host = hostOf(url);
+        var methods = p ? ['direct', 'proxy'] : ['direct'];
+        if (p && hostPref[host] === 'proxy') methods = ['proxy'];
+        var errors = [];
 
-        var headers = {};
-        if (!p) {
-            // працює в застосунку (Android); у браузері ці заголовки ігноруються
-            headers['User-Agent'] = UA;
-            if (o.ref) headers.Referer = o.ref;
-            if (o.xhr) headers['X-Requested-With'] = 'XMLHttpRequest';
-        }
-        if (o.post) headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+        (function attempt(i) {
+            var method = methods[i];
+            var net = new Lampa.Reguest();
+            var u = url;
+            var headers = {};
 
-        net.timeout(20000);
-        net.native(u, ok, fail || function () {}, o.post || false, { dataType: 'text', headers: headers });
+            if (method === 'proxy') {
+                u = p + encodeURIComponent(url) +
+                    (o.ref ? '&ref=' + encodeURIComponent(o.ref) : '') +
+                    (o.xhr ? '&xhr=1' : '');
+            } else {
+                headers['User-Agent'] = UA;
+                headers['Accept-Language'] = 'uk-UA,uk;q=0.9,en;q=0.8';
+                if (o.ref) headers.Referer = o.ref;
+                if (o.xhr) headers['X-Requested-With'] = 'XMLHttpRequest';
+            }
+            if (o.post) headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+
+            net.timeout(20000);
+            net.native(u, function (text) {
+                if (method === 'proxy' && methods.length === 2 && i === 1) hostPref[host] = 'proxy';
+                ok(text);
+            }, function (a) {
+                errors.push((method === 'proxy' ? 'проксі' : 'напряму') + ': ' + describe(a));
+                if (i + 1 < methods.length) return attempt(i + 1);
+                if (fail) fail(errors.join('; '));
+            }, o.post || false, { dataType: 'text', headers: headers });
+        })(0);
     }
 
     function abs(base, href) {
@@ -193,13 +234,15 @@
         }];
     }
 
+    // cb(results|null, info). При повній невдачі info.error містить причини.
     function searchSite(site, query, cb) {
         var attempts = attemptsFor(site, query);
         var anyOk = false;
         var lastInfo = null;
+        var lastErr = '';
 
         (function next(i) {
-            if (i >= attempts.length) return cb(anyOk ? [] : null, lastInfo);
+            if (i >= attempts.length) return cb(anyOk ? [] : null, anyOk ? lastInfo : { error: lastErr });
 
             var at = attempts[i];
             get(at.url, function (html) {
@@ -218,9 +261,10 @@
 
                 if (res.length) cb(res, lastInfo);
                 else next(i + 1);
-            }, function () {
+            }, function (err) {
+                lastErr = err;
                 next(i + 1);
-            }, { post: at.post });
+            }, { post: at.post, ref: site.base + '/' });
         })(0);
     }
 
@@ -256,9 +300,9 @@
             }
 
             cb({ iframes: iframes, playlist: playlist });
-        }, function () {
-            cb(null);
-        }, {});
+        }, function (err) {
+            cb(null, err);
+        }, { ref: page.site.base + '/' });
     }
 
     // Плейлист DLE (UAKino): <li data-file data-id data-voice>
@@ -282,11 +326,11 @@
             doc.querySelectorAll('li').forEach(function (li) {
                 var file = li.getAttribute('data-file');
                 var id = li.getAttribute('data-id');
-                var text = li.textContent.replace(/\s+/g, ' ').trim();
+                var txt = li.textContent.replace(/\s+/g, ' ').trim();
                 if (file) {
-                    eps.push({ id: id || '', voice: li.getAttribute('data-voice') || '', title: text, file: abs(page.site.base, file) });
+                    eps.push({ id: id || '', voice: li.getAttribute('data-voice') || '', title: txt, file: abs(page.site.base, file) });
                 } else if (id !== null) {
-                    labels[id] = text;
+                    labels[id] = txt;
                 }
             });
 
@@ -322,12 +366,32 @@
         try { return JSON.parse(str); } catch (e) { return null; }
     }
 
-    // Рядок JS-літерала key:"..." з екрануванням
-    function jsString(html, key) {
-        var re = new RegExp('[\\s,{]' + key + '\\s*:\\s*([\'"])((?:\\\\.|(?!\\1)[\\s\\S])*)\\1');
-        var m = html.match(re);
-        if (!m) return null;
-        return m[2].replace(/\\(.)/g, function (s, c) { return c === 'n' ? '\n' : c; });
+    // Усі рядкові значення key:"..." з екрануванням (без важких regex)
+    function jsStrings(html, key, max) {
+        var re = new RegExp('[\\s,{]' + key + '\\s*:\\s*([\'"])', 'g');
+        var out = [];
+        var m;
+
+        while ((m = re.exec(html)) && out.length < (max || 6)) {
+            var q = m[1];
+            var s = '';
+            var i = m.index + m[0].length;
+            var closed = false;
+
+            for (; i < html.length; i++) {
+                var c = html.charAt(i);
+                if (c === '\\') {
+                    var n = html.charAt(++i);
+                    s += n === 'n' ? '\n' : n;
+                    continue;
+                }
+                if (c === q) { closed = true; break; }
+                s += c;
+            }
+            if (closed) out.push(s);
+            re.lastIndex = i + 1;
+        }
+        return out;
     }
 
     // "[360]url,[720]url" або "url1 or url2" -> найкраща якість
@@ -410,10 +474,9 @@
         return /^\s*(\[|https?:|\{)/.test(out) ? out : null;
     }
 
-    function playerjsData(html) {
-        var file = jsString(html, 'file');
+    function interpretFile(file) {
+        file = String(file || '').trim();
         if (!file) return null;
-        file = file.trim();
 
         if (file.charAt(0) === '#') {
             var dec = decodeEnc(file);
@@ -431,26 +494,41 @@
         return u ? { url: u } : null;
     }
 
+    function playerjsData(html) {
+        var files = jsStrings(html, 'file');
+        var enc = null;
+        for (var i = 0; i < files.length; i++) {
+            var d = interpretFile(files[i]);
+            if (d && (d.tree || d.url)) return d;
+            if (d && d.enc) enc = d;
+        }
+        return enc;
+    }
+
     // cb({tree}) | cb({url}) | cb({info})
     function extractStream(iframe, ref, cb) {
         get(iframe, function (html) {
-            html = String(html);
-            var d = playerjsData(html);
+            var d;
+            try {
+                html = String(html);
+                d = playerjsData(html);
+                if (d && d.tree) return cb({ tree: d.tree });
+                if (d && d.url) return cb({ url: d.url });
 
-            if (d && d.tree) return cb({ tree: d.tree });
-            if (d && d.url) return cb({ url: d.url });
+                var clean = html.replace(/\\\//g, '/');
+                var one = clean.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/) || clean.match(/https?:\/\/[^"'\s\\]+\.mp4[^"'\s\\]*/);
+                if (one) return cb({ url: one[0] });
 
-            var clean = html.replace(/\\\//g, '/');
-            var one = clean.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/) || clean.match(/https?:\/\/[^"'\s\\]+\.mp4[^"'\s\\]*/);
-            if (one) return cb({ url: one[0] });
-
-            cb({
-                info: (d && d.enc ? 'шифр ' + d.enc + ' не розпізнано; ' : '') +
-                    'потік не знайдено у відповіді (' + html.length + ' симв.): ' +
-                    html.replace(/\s+/g, ' ').slice(0, 90)
-            });
-        }, function () {
-            cb({ info: 'запит до плеєра не пройшов (Referer, проксі або домен плеєра не дозволено)' });
+                cb({
+                    info: (d && d.enc ? 'шифр ' + d.enc + ' не розпізнано; ' : '') +
+                        'потік не знайдено у відповіді (' + html.length + ' симв.): ' +
+                        html.replace(/\s+/g, ' ').slice(0, 90)
+                });
+            } catch (e) {
+                cb({ info: 'помилка розбору плеєра: ' + (e && e.message || e) });
+            }
+        }, function (err) {
+            cb({ info: 'запит до плеєра не пройшов: ' + err });
         }, { ref: ref });
     }
 
@@ -463,28 +541,54 @@
         return /^https?:\/\/([a-z0-9-]+\.)*ashdi\.vip\//i.test(String(url || ''));
     }
 
-    function playUrl(url, title, list) {
-        var p = { url: url, title: title };
-        if (isAshdi(url) && !isAndroid()) p.hls_type = 'native';
-        Lampa.Player.play(p);
-        Lampa.Player.playlist(list && list.length ? list : [p]);
+    // Потік через проксі (з перезаписом m3u8 у Worker) - для браузера
+    function streamUrl(u, sref) {
+        var p = proxy();
+        if (!p || !streamViaProxy()) return u;
+        return p + encodeURIComponent(u) + (sref ? '&ref=' + encodeURIComponent(sref) : '');
     }
 
-    function browseTree(nodes, title, back, ref) {
+    function showInfo(title, lines) {
+        Lampa.Select.show({
+            title: title,
+            items: lines.map(function (l) { return { title: l }; }),
+            onSelect: backContent,
+            onBack: backContent
+        });
+    }
+
+    function playUrl(url, title, list, sref) {
+        var p = { url: streamUrl(url, sref), title: title };
+        if (isAshdi(url) && (platformIs('tizen') || platformIs('webos'))) p.hls_type = 'native';
+
+        var playlist = list && list.length ? list.map(function (x) {
+            return { url: streamUrl(x.url, sref), title: x.title };
+        }) : [p];
+
+        noty('Потік: ' + hostOf(url) + (streamViaProxy() && proxy() ? ' (через проксі)' : ''));
+        try {
+            Lampa.Player.play(p);
+            Lampa.Player.playlist(playlist);
+        } catch (e) {
+            showInfo('Помилка запуску плеєра', [String(e && e.message || e), url]);
+        }
+    }
+
+    function browseTree(nodes, title, back, ref, sref) {
         Lampa.Select.show({
             title: title,
             items: nodes.map(function (n) { return { title: n.title || '—', node: n }; }),
             onSelect: function (a) {
                 var n = a.node;
                 if (n.folder) {
-                    browseTree(n.folder, n.title || title, function () { browseTree(nodes, title, back, ref); }, ref);
+                    browseTree(n.folder, n.title || title, function () { browseTree(nodes, title, back, ref, sref); }, ref, sref);
                 } else if (n.player) {
                     playIframe(n.player, ref, n.title || title);
                 } else {
                     var list = nodes.filter(function (x) { return x.url; }).map(function (x) {
                         return { url: x.url, title: x.title };
                     });
-                    playUrl(n.url, n.title || title, list);
+                    playUrl(n.url, n.title || title, list, sref);
                 }
             },
             onBack: back || backContent
@@ -494,22 +598,16 @@
     function playIframe(iframe, ref, title) {
         noty('Шукаю потік...');
         extractStream(iframe, ref, function (r) {
-            if (r.tree) return browseTree(r.tree, title, null, ref);
-            if (r.url) return playUrl(r.url, title);
-
-            Lampa.Select.show({
-                title: 'Не вдалося витягти потік',
-                items: [{ title: r.info }, { title: 'Плеєр: ' + iframe }],
-                onSelect: backContent,
-                onBack: backContent
-            });
+            if (r.tree) return browseTree(r.tree, title, null, ref, iframe);
+            if (r.url) return playUrl(r.url, title, null, iframe);
+            showInfo('Не вдалося витягти потік', [r.info, 'Плеєр: ' + iframe]);
         });
     }
 
     function pickPlayer(page) {
         noty('Завантажую сторінку...');
-        loadPage(page, function (info) {
-            if (!info) return noty('Сторінку не вдалося завантажити');
+        loadPage(page, function (info, err) {
+            if (!info) return showInfo('Сторінку не вдалося завантажити', [err || 'невідома помилка', page.url]);
 
             var viaIframes = function () {
                 if (!info.iframes.length) return noty('Плеєрів на сторінці не знайдено');
@@ -518,7 +616,7 @@
                 Lampa.Select.show({
                     title: 'Оберіть плеєр',
                     items: info.iframes.map(function (u, i) {
-                        return { title: 'Плеєр ' + (i + 1) + ' (' + u.replace(/^https?:\/\//, '').split('/')[0] + ')', url: u };
+                        return { title: 'Плеєр ' + (i + 1) + ' (' + hostOf(u) + ')', url: u };
                     }),
                     onSelect: function (a) { playIframe(a.url, page.url, page.title); },
                     onBack: backContent
@@ -546,15 +644,15 @@
 
         var all = [];
         var seen = {};
-        var errors = 0;
+        var errList = {};
         var total = sites.length * queries.length;
         var left = total;
         noty('Шукаю: ' + queries[0]);
 
         sites.forEach(function (site) {
             queries.forEach(function (query) {
-                searchSite(site, query, function (res) {
-                    if (res === null) errors++;
+                searchSite(site, query, function (res, info) {
+                    if (res === null) errList[site.name] = info && info.error || 'помилка запиту';
                     (res || []).slice(0, 8).forEach(function (r) {
                         if (seen[r.url]) return;
                         seen[r.url] = 1;
@@ -566,18 +664,24 @@
                     var items = all.map(function (r) {
                         return { title: r.title, subtitle: r.site.name, page: r };
                     });
-                    items.push({ title: '⚙ Керування сайтами', manage: true });
 
                     var title = 'UAFresh: результати';
-                    if (!all.length && errors === total) title = 'Усі запити не пройшли (потрібен CORS-проксі?)';
-                    else if (!all.length) title = 'Нічого не знайдено';
+                    if (!all.length) {
+                        var names = Object.keys(errList);
+                        title = names.length ? 'Не вдалося отримати відповідь від сайтів' : 'Нічого не знайдено';
+                        names.forEach(function (n) {
+                            items.push({ title: n + ': ' + errList[n] });
+                        });
+                    }
+                    items.push({ title: '⚙ Керування сайтами', manage: true });
 
                     Lampa.Select.show({
                         title: title,
                         items: items,
                         onSelect: function (a) {
                             if (a.manage) manageSites();
-                            else pickPlayer(a.page);
+                            else if (a.page) pickPlayer(a.page);
+                            else backContent();
                         },
                         onBack: backContent
                     });
@@ -638,7 +742,7 @@
         searchSite(site, 'fallout', function (res, info) {
             var items;
             if (res === null) {
-                items = [{ title: 'Помилка запиту (потрібен проксі або сайт недоступний)' }];
+                items = [{ title: 'Помилка запиту' }, { title: (info && info.error) || 'без деталей' }];
             } else {
                 items = [{ title: 'Знайдено результатів: ' + res.length }];
                 if (info) {
@@ -707,6 +811,11 @@
         });
         items.push({ title: '+ Додати сайт', add: true });
         items.push({ title: 'CORS-проксі', subtitle: proxy() || 'не задано', proxy: true });
+        items.push({
+            title: 'Потік через проксі: ' + (streamViaProxy() ? 'так' : 'ні'),
+            subtitle: 'Увімкніть, якщо в браузері відео не запускається',
+            streamProxy: true
+        });
         items.push({ title: 'Скинути список сайтів', reset: true });
 
         Lampa.Select.show({
@@ -717,8 +826,12 @@
                 else if (a.proxy) {
                     Lampa.Input.edit({ title: 'CORS-проксі (https://проксі/?url=)', value: proxy(), free: true, nosave: true }, function (val) {
                         Lampa.Storage.set('uafresh_proxy', (val || '').trim());
+                        hostPref = {};
                         manageSites();
                     });
+                } else if (a.streamProxy) {
+                    Lampa.Storage.set('uafresh_stream_proxy', !streamViaProxy());
+                    manageSites();
                 } else if (a.reset) {
                     saveSites([]);
                     mergePresets();
@@ -747,9 +860,23 @@
         });
     }
 
+    // Показує помилку відтворення, щоб було зрозуміло, що саме не так
+    function initPlayerHook() {
+        try {
+            if (Lampa.PlayerVideo && Lampa.PlayerVideo.listener && Lampa.PlayerVideo.listener.follow) {
+                Lampa.PlayerVideo.listener.follow('error', function (e) {
+                    var text = String(e && (e.error || e.message) || 'помилка плеєра');
+                    if (/fatal \[false\]/.test(text)) return;
+                    noty('UAFresh: ' + text.slice(0, 120));
+                });
+            }
+        } catch (e) {}
+    }
+
     function init() {
         mergePresets();
         initButton();
+        initPlayerHook();
     }
 
     if (window.appready) init();
