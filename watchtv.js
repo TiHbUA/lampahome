@@ -212,12 +212,15 @@
 
         var all = [];
         var seen = {};
-        var left = sites.length * queries.length;
+        var errors = 0;
+        var total = sites.length * queries.length;
+        var left = total;
         noty('Шукаю: ' + queries[0]);
 
         sites.forEach(function (site) {
             queries.forEach(function (query) {
                 searchSite(site, query, function (res) {
+                    if (res === null) errors++;
                     (res || []).slice(0, 8).forEach(function (r) {
                         if (seen[r.url]) return;
                         seen[r.url] = 1;
@@ -225,14 +228,23 @@
                     });
 
                     if (--left > 0) return;
-                    if (!all.length) return noty('Нічого не знайдено');
+
+                    var items = all.map(function (r) {
+                        return { title: r.title, subtitle: r.site.name, page: r };
+                    });
+                    items.push({ title: '⚙ Керування сайтами', manage: true });
+
+                    var title = 'UAFresh: результати';
+                    if (!all.length && errors === total) title = 'Усі запити не пройшли (потрібен CORS-проксі?)';
+                    else if (!all.length) title = 'Нічого не знайдено';
 
                     Lampa.Select.show({
-                        title: 'UAFresh: результати',
-                        items: all.map(function (r) {
-                            return { title: r.title, subtitle: r.site.name, page: r };
-                        }),
-                        onSelect: function (a) { pickPlayer(a.page); },
+                        title: title,
+                        items: items,
+                        onSelect: function (a) {
+                            if (a.manage) manageSites();
+                            else pickPlayer(a.page);
+                        },
                         onBack: backContent
                     });
                 });
@@ -241,10 +253,6 @@
     }
 
     // ===== КЕРУВАННЯ САЙТАМИ (НАЛАШТУВАННЯ) =====
-    function backSettings() {
-        Lampa.Controller.toggle('settings_component');
-    }
-
     function normalizeUrl(v) {
         v = (v || '').trim();
         if (!v) return '';
@@ -341,47 +349,27 @@
             return { title: (s.enabled ? '✓ ' : '✗ ') + s.name, subtitle: s.base, index: i };
         });
         items.push({ title: '+ Додати сайт', add: true });
+        items.push({ title: 'CORS-проксі', subtitle: proxy() || 'не задано', proxy: true });
+        items.push({ title: 'Скинути список сайтів', reset: true });
 
         Lampa.Select.show({
             title: 'Сайти UAFresh',
             items: items,
             onSelect: function (a) {
                 if (a.add) addSite();
-                else siteMenu(a.index);
+                else if (a.proxy) {
+                    Lampa.Input.edit({ title: 'CORS-проксі (https://проксі/?url=)', value: proxy(), free: true, nosave: true }, function (val) {
+                        Lampa.Storage.set('uafresh_proxy', (val || '').trim());
+                        manageSites();
+                    });
+                } else if (a.reset) {
+                    saveSites([]);
+                    mergePresets();
+                    noty('Список скинуто');
+                    manageSites();
+                } else siteMenu(a.index);
             },
-            onBack: backSettings
-        });
-    }
-
-    function initSettings() {
-        Lampa.SettingsApi.addComponent({
-            component: 'uafresh',
-            name: 'UAFresh',
-            icon: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4z"/></svg>'
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'uafresh',
-            param: { name: 'uafresh_manage', type: 'button' },
-            field: { name: 'Сайти', description: 'Додати, вимкнути, перевірити або видалити сайти' },
-            onChange: manageSites
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'uafresh',
-            param: { name: 'uafresh_proxy', type: 'input', default: '' },
-            field: { name: 'CORS-проксі', description: 'Формат: https://проксі/?url=  (порожнє = без проксі)' }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'uafresh',
-            param: { name: 'uafresh_reset', type: 'button' },
-            field: { name: 'Скинути список сайтів', description: 'Видалити свої сайти й повернути стандартні' },
-            onChange: function () {
-                saveSites([]);
-                mergePresets();
-                noty('Список скинуто');
-            }
+            onBack: backContent
         });
     }
 
@@ -404,7 +392,6 @@
 
     function init() {
         mergePresets();
-        initSettings();
         initButton();
     }
 
